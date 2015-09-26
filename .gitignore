@@ -1,0 +1,7 @@
+data
+docs
+dump
+out
+plot
+*.Rproj
+.R*
