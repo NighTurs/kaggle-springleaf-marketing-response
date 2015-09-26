@@ -6,42 +6,64 @@ library(caret)
 library(MASS)
 library(pROC)
 
-train <- fread("data/train.csv", head = T, sep = ',')
-target <- train$target
-train <- subset(train, select=-c(target, ID))
-train_len <- nrow(train)
-test <- fread("data/test.csv", head = T, sep = ',')
-id <- test$ID
-test <- subset(test, select=-c(ID))
-data <- rbind(train, test)
-rm(train)
-rm(test)
+setRefClass("data",
+            fields=list(
+                data="data.table",
+                target="integer",
+                train_len="integer",
+                id="integer"
+            )
+)
 
-remove_cols_with_one_value <- function(data) {
-    col_ct = sapply(data, function(x) length(unique(x)))
-    data[,!names(data) %in% names(col_ct[col_ct==1]), with = F]
+read_data <- function() {
+    print("Read train dataset : started")
+    train <- fread("data/train.csv", head = T, sep = ',')
+    target <- train$target
+    train <- subset(train, select=-c(target, ID))
+    train_len <- nrow(train)
+    print("Read train dataset : finished")
+    print("Read test dataset : started")
+    test <- fread("data/test.csv", head = T, sep = ',')
+    id <- test$ID
+    test <- subset(test, select=-c(ID))
+    data <- rbind(train, test)
+    print("Read test dataset : finished")
+    gc()
+    new("data", data = data, target = target, train_len = train_len, id = id)
 }
 
-transform_date_columns <- function(data) {
+remove_cols_with_one_value <- function(dt) {
+    print("Remove cols with one value : started")
+    col_ct = sapply(dt$data, function(x) length(unique(x)))
+    dt$data <- dt$data[,!names(dt$data) %in% names(col_ct[col_ct==1]), with = F]
+    gc()
+    print("Remove cols with one value : finished")
+}
+
+transform_date_columns <- function(dt) {
+    print("Transform date columns : started")
     date_cols <- c('VAR_0073', 'VAR_0075', 'VAR_0156', 'VAR_0157', 'VAR_0158',
                    'VAR_0159', 'VAR_0166', 'VAR_0167', 'VAR_0168', 'VAR_0169',
                    'VAR_0176', 'VAR_0177', 'VAR_0178', 'VAR_0179', 'VAR_0204',
                    'VAR_0217')
     
     for (col in date_cols) {
-        date <- strptime(data[[col]], "%d%B%y:%H:%M:%S")
-        data[[paste(col, '_year', sep = '')]] <- date$year
-        data[[paste(col, '_mon', sep = '')]] <- date$mon
-        data[[paste(col, '_wday', sep = '')]] <- date$wday
-        data[[paste(col, '_double', sep = '')]] <- as.double(date)
+        date <- strptime(dt$data[[col]], "%d%B%y:%H:%M:%S")
+        dt$data[[paste(col, '_year', sep = '')]] <- date$year
+        dt$data[[paste(col, '_mon', sep = '')]] <- date$mon
+        dt$data[[paste(col, '_wday', sep = '')]] <- date$wday
+        dt$data[[paste(col, '_double', sep = '')]] <- as.double(date)
         if (col == 'VAR_0204') {
-            data[[paste(col, '_hour', sep = '')]] <- date$hour
+            dt$data[[paste(col, '_hour', sep = '')]] <- date$hour
         }
     }
-    data[,!names(data) %in% date_cols, with = F]
+    dt$data <- dt$data[,!names(dt$data) %in% date_cols, with = F]
+    gc()
+    print("Transform date columns : finished")
 }
 
-remaining_chars_to_factors <- function(data) {
+remaining_chars_to_factors <- function(dt) {
+    print("Transform remaining char columns to integers : started")
     char_columns <- c("VAR_0001", "VAR_0005", "VAR_0008", "VAR_0009", "VAR_0010", 
       "VAR_0011", "VAR_0012", "VAR_0043", "VAR_0044", "VAR_0196", "VAR_0200", 
       "VAR_0202", "VAR_0214", "VAR_0216", "VAR_0222", "VAR_0226", "VAR_0229", 
@@ -50,19 +72,59 @@ remaining_chars_to_factors <- function(data) {
       "VAR_0354", "VAR_0404", "VAR_0466", "VAR_0467", "VAR_0493", "VAR_1934"
     )
     for (col in char_columns) {
-        data[[col]] <- as.integer(as.factor(data[[col]]))
+        dt$data[[col]] <- as.integer(as.factor(dt$data[[col]]))
     }
-    data
+    gc()
+    print("Transform remaining char columns to integers : finished")
 }
 
-data <- remove_cols_with_one_value(data)
-data <- transform_date_columns(data)
-data <- remaining_chars_to_factors(data)
-data[is.na(data)] <- -1
-pass_columns <- dget(file = "./pass_columns")
-data <- data[, pass_columns, with = F]
-data$VAR_0212 <- NULL
-gc()
+cleaning_and_transformatins <- function(dt) {
+    print("Cleaning and transformations : started")
+    remove_cols_with_one_value(dt)
+    transform_date_columns(dt)
+    remaining_chars_to_factors(dt)
+    print("Substitute every NA with -1 : started")
+    dt$data[is.na(dt$data)] <- -1
+    print("Substitute every NA with -1 : finished")
+    print("Filter pre removed features : started")
+    pass_columns <- dget(file = "./dump/pass_columns")
+    dt$data <- dt$data[, pass_columns, with = F]
+    # this variable has HUGE numbers in it, which later cause troubles
+    # seems save to remove it cause this is similar to ID's
+    dt$data$VAR_0212 <- NULL    
+    print("Filter pre removed features : finished")
+    gc()
+    print("Cleaning and transformations : finished")
+}
+
+save_transformed_data <- function(dt) {
+    print("Save transformed data : started")
+    write.csv(dt$data, file = "dump/tdata.csv", row.names = F, quote = F) 
+    dput(x = list(target = dt$target, train_len = dt$train_len,
+                  id = dt$id), file = "dump/tdata")
+    print("Save transformed data : finished")
+}
+
+save_transformed_train <- function(dt) {
+    print("Save transformed train : started")
+    write.csv(dt$data[1:dt$train_len], file = "dump/ttrain.csv", row.names = F, quote = F) 
+    print("Save transformed train : finished")
+}
+
+load_transformed_data <- function() {
+    print("Load transformed data : started")
+    dt <- dget(file = "dump/tdata")
+    print("Load transformed data : finished")
+    dt
+}
+
+read_transform_and_save_data <- function() {
+    print("Read, transform save data : started")
+    dt <- read_data()
+    cleaning_and_transformatins(dt)
+    save_transformed_data(dt)
+    print("Read, transform save data : finished")
+}
 
 train <- data[1:train_len,]
 test <- data[(train_len + 1):nrow(data),]
