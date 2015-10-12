@@ -1,3 +1,12 @@
+library(data.table)
+library(bit64)
+library(e1071)
+library(kernlab)
+library(caret)
+library(MASS)
+library(pROC)
+library(xgboost)
+
 imp <- dget(file = "./dump/imp_1343_1330it")
 
 cols <- head(imp$Feature, n = 55)
@@ -6,7 +15,7 @@ target <- dget(file = "./dump/tdata")$target
 
 for (col in colnames(train)) {
     tmp <- unlist(log(train[, col, with = F] + 1))
-    tmp[is.infinite(k)] <- -1
+    tmp[is.infinite(tmp)] <- -1
     train[[paste(col, '_log', sep = '')]] <- tmp
 }
 
@@ -24,11 +33,11 @@ rm(train)
 gc()
 
 cols_two_times <- c(colnames(train_train), colnames(train_train))
-N <- 5
+N <- 350
 res <- data.frame(colname = 'colname', include = F, result = 0.6, best = 0.6, 
                   decision = T, stringsAsFactors = F)
 
-iter <- function(cols, iters) {
+iter <- function(cols, iters, seed = 1234) {
     dtrain <- xgb.DMatrix(data.matrix(train_train[, cols,with = F]), label=target_train)
     dval <- xgb.DMatrix(data.matrix(train_test[, cols, with = F]), label=target_test)
     
@@ -36,45 +45,45 @@ iter <- function(cols, iters) {
     
     param <- list(  objective           = "binary:logistic", 
                     eta                 = 0.010,
-                    max_depth           = 7,
+                    max_depth           = 2,
                     subsample           = 0.7,
                     colsample_bytree    = 0.8,
                     eval_metric         = "auc"
     )
     
-    set.seed(1234)
+    set.seed(seed)
     
     clf <- xgb.cv(params              = param, 
                   data                = dtrain, 
-                  nrounds             = iters, # changed from 300 / my best 1300
+                  nrounds             = 7000, # changed from 300 / my best 1300
                   verbose             = T, 
-                  nfold               = 3,
+                  early.stop.round    = 30,
+                  nfold               = 4,
                   maximize            = TRUE)
-    clf[iters,]$test.auc.mean
+    clf[nrow(clf),]$test.auc.mean
 }
 
-best <- iter(cols, N)
+cols <- imp$Feature[1:5]
+best <- (iter(cols, N, 1) + iter(cols, N, 2) + iter(cols, N, 3) + iter(cols, N, 4) + 
+    iter(cols, N, 5) + iter(cols, N, 6) + iter(cols, N, 7) + iter(cols, N, 8)) / 8
+incols <- cols
 
-for (col in cols_two_times) {
+for (col in rev(imp$Feature[6:1000])) {
     if (!(col %in% cols)) {
         cols <- c(col, cols)
     } else {
         cols <- cols[cols != col]
     }
-    cur <- iter(cols, N)
+    print(cols)
+    cur <- (iter(cols, N, 123) + iter(cols, N, 1234)) / 2
     include <- col %in% cols
     if (cur > best) {
-        res <- rbind(res , list(col, include, cur, best, T))
-        best <- cur
+        res <- rbind(res, list(col, include, cur, best, T))
     } else {
-        res <- rbind(res , list(col, include, cur, best, F))
-        if (!(col %in% cols)) {
-            cols <- c(col, cols)
-        } else {
-            cols <- cols[cols != col]
-        }   
+        res <- rbind(res, list(col, include, cur, best, F))
     }
     dput(x = cols, file = "dump/fs_cols")
     write.csv(res, file = "dump/fs.csv", row.names = F, quote = F) 
+    cols <- incols
     gc()
 }
