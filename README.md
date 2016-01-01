@@ -1,0 +1,1 @@
+####Solution to [Kaggle Springleaf Marketing Response competition](https://www.kaggle.com/c/springleaf-marketing-response)
